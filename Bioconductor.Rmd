@@ -1,0 +1,182 @@
+---
+title: "PHAR 691 Functional Genomics Presentation"
+author: "Jerome Dixon"
+date: "4/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+#Initial Bioconductor setup
+```{r setup bioconductor}
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install()
+
+
+```
+
+#Additional Packages
+```{r load bioconductor packages}
+
+BiocManager::install(c("GenomicFeatures", "AnnotationDbi", "SummarizedExperiment","mygene","DESeq2","GenomicScores","SNPlocs.Hsapiens.dbSNP144.GRCh37","MafDb.1Kgenomes.phase1.hs37d5"))
+
+```
+
+#Parkinson's Disease (PD) gene info
+```{r gene info}
+
+library(mygene)
+
+pd_gene <- getGene("ENSG00000145335", fields="all")
+
+
+```
+
+
+```{r load biomart data}
+
+library(biomaRt)
+library(DESeq2)
+library(tidyverse)
+
+#https://useast.ensembl.org/Homo_sapiens/Gene/Variation_Gene/Table?db=core;g=ENSG00000145335;r=4:89700345-89838315
+
+ensembl=useMart("ENSEMBL_MART_ENSEMBL", host="useast.ensembl.org")
+
+listDatasets(ensembl) %>% 
+    filter(str_detect(description, "Human"))
+
+```
+
+
+```{r datamart attributes}
+
+hsapien_mart = useDataset("hsapiens_gene_ensembl", mart=ensembl)
+
+filters_mart <- listFilters(hsapien_mart) 
+
+# check the available "attributes" - things you can retreive
+attributes <- listAttributes(hsapien_mart) 
+
+pages <- as.data.frame(attributePages(hsapien_mart))
+
+```
+
+
+
+```{r pd gene filter}
+
+ourFilter <- "ensembl_gene_id"
+filterValue <- "ENSG00000145335"
+
+```
+
+
+```{r pd high risk snps}
+
+snca_query <- getBM(attributes = c('variation_name','allele', 'ensembl_transcript_id', 'polyphen_prediction_2076', 'polyphen_score_2076'), filters = ourFilter, values = filterValue, mart = hsapien_mart)
+
+
+```
+
+```{r pd proteins}
+
+snca_query2 <- getBM(attributes = c('ensembl_transcript_id', 'ensembl_peptide_id','peptide_version', 'somatic_allele','somatic_peptide_location', 'chromosome_name'), filters = ourFilter, values = filterValue, mart = hsapien_mart)
+
+```
+
+```{r pd exons introns}
+
+snca_query3 <- getBM(attributes = c('ensembl_transcript_id', '5utr', '3utr', 'gene_exon'), filters = ourFilter, values = filterValue, mart = hsapien_mart)
+
+```
+
+
+```{r format high risk pd snps}
+
+library(GenomicScores)
+
+risky_snps <- snca_query %>% filter(snca_query$polyphen_score_2076 > .45)
+
+score_snps <- risky_snps$variation_name
+
+```
+
+
+```{r load mcap data}
+
+mcap <- getGScores("mcap.v1.0.hg19")
+
+```
+
+
+```{r load snp allele data}
+
+library(SNPlocs.Hsapiens.dbSNP144.GRCh37)
+
+pd <- snpsById(SNPlocs.Hsapiens.dbSNP144.GRCh37, ids=score_snps, ifnotfound="drop")
+
+pd
+
+```
+
+
+```{r load population allele data}
+
+library(MafDb.1Kgenomes.phase1.hs37d5)
+
+mafdb <- MafDb.1Kgenomes.phase1.hs37d5
+
+populations(mafdb)
+
+
+```
+
+
+
+```{r population freq}
+
+PDmafs <- gscores(mafdb, pd, pop=c("AF", "EUR_AF", "AFR_AF", "AMR_AF", "ASN_AF"))
+
+```
+
+
+```{r load ancestryDNA}
+
+library(data.table)
+
+dna_ancestry <- fread("data/AncestryDNA.txt",skip=18L,header=TRUE)
+
+```
+
+```{r format dataframes for join}
+
+dna_ancestry$allele <- paste0(dna_ancestry$allele1,"/",dna_ancestry$allele2)
+
+names(dna_ancestry)[6] <- "ancestry_allele"
+
+names(risky_snps)[1] <- "rsid"
+names(risky_snps)[2] <- "ensemble_allele"
+
+
+```
+
+
+```{r pd_test }
+library(tidyverse)
+library(magrittr)
+
+pd_test <- dna_ancestry %>% inner_join(risky_snps, by="rsid")
+
+pd_test %<>%  select(1:3,6:10)
+
+```
+
+
+
